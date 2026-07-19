@@ -1,0 +1,584 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { useI18n } from '../../hooks/useI18n';
+import * as api from '../../api/tauri';
+import type { ModelConfig, AgentEvent } from '../../api/types';
+import { useChatPersistence } from '../../hooks/useChatPersistence';
+import type { DiskMsg } from '../../hooks/useChatPersistence';
+import { errorToKey } from '../../utils/normalizeError';
+import type { BubbleChip } from '../../components/chat/ChatBubble';
+import type { ChatMessage } from './types';
+import { MA_PAGE_SIZE } from './types';
+import { MotherAgentContext } from './context';
+import { useNavigationStore } from '../../stores/navigationStore';
+import { isTauriRuntime } from '../../lib/tauri-runtime';
+import { providersApi } from '../../lib/api';
+import { loadEzSphereAgentModels } from './ezsphereModels';
+
+// ===== Provider =====
+
+function normalizeAgentLocale(locale: string | undefined): string {
+  const normalized = (locale || '').toLowerCase().replace(/_/g, '-');
+  if (
+    normalized === 'zh-tw' ||
+    normalized.startsWith('zh-hk') ||
+    normalized.startsWith('zh-mo') ||
+    normalized.startsWith('zh-hant')
+  ) {
+    return 'zh-TW';
+  }
+  if (normalized.startsWith('zh')) return 'zh';
+  if (normalized.startsWith('ja')) return 'ja';
+  return 'en';
+}
+
+export function MotherAgentProvider({ children }: { children: React.ReactNode }) {
+  // From stores (replaces drilled props)
+  const { motherPrefill: initialMessage, activePage, setMotherNewMessage } = useNavigationStore();
+  const onNewMessage = useCallback(() => {
+    if (activePage !== 'mother') setMotherNewMessage(true);
+  }, [activePage, setMotherNewMessage]);
+  const onAgentRunningChange = useNavigationStore((s: { setAgentRunning: (value: boolean) => void }) => s.setAgentRunning);
+  const { t: _t, locale } = useI18n(); // locale for agent hint; t for error messages
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [agentModel, setAgentModelRaw] = useState<string | null>(() => {
+    // 优先读新键，回退旧键并迁移
+    const v = localStorage.getItem('ezsphere_agent_model');
+    if (v) return v;
+    const legacy = localStorage.getItem('echobird_agent_model');
+    if (legacy) {
+      localStorage.setItem('ezsphere_agent_model', legacy);
+      localStorage.removeItem('echobird_agent_model');
+      return legacy;
+    }
+    return null;
+  });
+  const setAgentModel = useCallback((v: string | null) => {
+    setAgentModelRaw(v);
+    if (v) localStorage.setItem('ezsphere_agent_model', v);
+    else localStorage.removeItem('ezsphere_agent_model');
+  }, []);
+  const [chatInput, setChatInput] = useState('');
+  const [chatOutput, setChatOutput] = useState<ChatMessage[]>([]);
+  // Per-server chat history map
+  const chatHistoryMap = useRef<Map<string, ChatMessage[]>>(new Map());
+
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [agentState, setAgentState] = useState('idle');
+  const chatEndRef = useRef<HTMLDivElement>(null!);
+  const abortTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!initialMessage) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setChatInput(initialMessage);
+  }, [initialMessage]);
+
+  // SSH servers shared state (persisted via backend)
+  const [sshServers, setSSHServers] = useState<
+    Array<{ id: string; host: string; port: string; username: string; alias?: string }>
+  >([]);
+
+  // Server selection (single-select)
+  const [selectedServerId, setSelectedServerId] = useState('local');
+
+  // Load saved SSH servers on mount
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    api
+      .loadSSHServers()
+      .then((servers) => {
+        setSSHServers(
+          servers.map((s) => ({
+            id: s.id,
+            host: s.host,
+            port: String(s.port),
+            username: s.username,
+            alias: s.alias,
+          }))
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  const addSSHServer = useCallback(
+    async (server: {
+      id: string;
+      host: string;
+      port: string;
+      username: string;
+      password?: string;
+      alias?: string;
+    }) => {
+      setSSHServers((prev) => [
+        ...prev,
+        {
+          id: server.id,
+          host: server.host,
+          port: server.port,
+          username: server.username,
+          alias: server.alias,
+        },
+      ]);
+      await api
+        .saveSSHServer(
+          server.id,
+          server.host,
+          parseInt(server.port) || 22,
+          server.username,
+          server.password || '',
+          server.alias
+        )
+        .catch(() => {});
+      useNavigationStore.getState().bumpSshServersVersion();
+    },
+    []
+  );
+  const removeSSHServer = useCallback(async (id: string) => {
+    setSSHServers((prev) => prev.filter((s) => s.id !== id));
+    setSelectedServerId((prev) => (prev === id ? 'local' : prev));
+    // Remove from backend
+    await api.removeSSHServerFromDisk(id).catch(() => {});
+    useNavigationStore.getState().bumpSshServersVersion();
+  }, []);
+
+  const prevServerRef = useRef('local');
+  const agentChatKey = (id: string) => `agent_${id}`;
+
+  // Shared mapper: ChatMessage → disk format
+  const toDisk = useCallback((m: ChatMessage): DiskMsg | null => {
+    if (m.type === 'user') return { role: 'user', content: m.text };
+    if (m.type === 'assistant') {
+      // Skip transient status messages — they're not real chat history
+      if (m.text.includes('__CONN_RETRY__') || m.text.includes('__CONN_FAILED__')) return null;
+      return { role: 'assistant', content: m.text };
+    }
+    if (m.type === 'tool_call') {
+      // Persist tool invocations so the rebuilt timeline matches what the user saw.
+      // Coerce 'running' → 'failed' on save: if we're still running when persisted,
+      // any later state (done/failed) overwrites this; if the session ends while
+      // running, the call was interrupted and 'failed' is the honest state.
+      const status = m.status === 'running' ? 'failed' : m.status;
+      return {
+        role: 'tool',
+        content: JSON.stringify({ id: m.id, name: m.name, args: m.args, status, output: m.output }),
+      };
+    }
+    if (m.type === 'error') return { role: 'system', content: (m as any).i18nKey || m.text };
+    if (m.type === 'cancelled') return { role: 'system', content: (m as any).i18nKey || m.text };
+    return null;
+  }, []);
+
+  // Shared mapper: disk format → ChatMessage
+  const fromDisk = useCallback((m: DiskMsg): ChatMessage => {
+    if (m.role === 'tool') {
+      try {
+        const o = JSON.parse(m.content);
+        const status: 'running' | 'done' | 'failed' =
+          o.status === 'done' || o.status === 'failed' ? o.status : 'failed';
+        return {
+          type: 'tool_call',
+          id: String(o.id ?? ''),
+          name: String(o.name ?? ''),
+          args: typeof o.args === 'string' ? o.args : '',
+          status,
+          output: typeof o.output === 'string' ? o.output : undefined,
+        };
+      } catch {
+        // Corrupted entry — fall back to a visible cancelled marker rather than crashing
+        return { type: 'cancelled', text: m.content };
+      }
+    }
+    if (m.role === 'system' && m.content === 'error.userCancelled') {
+      return { type: 'cancelled', text: '', i18nKey: m.content };
+    }
+    if (m.role === 'system' && m.content.startsWith('error.')) {
+      return { type: 'error', text: '', i18nKey: m.content };
+    }
+    if (m.role === 'system') {
+      return { type: 'cancelled', text: m.content };
+    }
+    return {
+      type: m.role === 'user' ? 'user' : 'assistant',
+      text: m.content,
+    } as ChatMessage;
+  }, []);
+
+  const prependMessages = useCallback((older: ChatMessage[]) => {
+    setChatOutput((prev) => [...older, ...prev]);
+  }, []);
+
+  const setMessagesFromDisk = useCallback((msgs: ChatMessage[]) => {
+    chatHistoryMap.current.set('local', msgs);
+    setChatOutput(msgs);
+  }, []);
+
+  const persistence = useChatPersistence<ChatMessage>({
+    diskKey: agentChatKey(selectedServerId),
+    messages: chatOutput,
+    prependMessages,
+    setMessages: setMessagesFromDisk,
+    toDisk,
+    fromDisk,
+    pageSize: MA_PAGE_SIZE,
+  });
+
+  // Load chat history from disk on mount
+  useEffect(() => {
+    persistence.loadInitial();
+  }, []);
+
+  const selectServer = useCallback(
+    async (id: string) => {
+      // Save current chat to history map
+      chatHistoryMap.current.set(prevServerRef.current, chatOutput);
+      // Load target server's chat from memory or localStorage
+      let history = chatHistoryMap.current.get(id);
+      if (!history || history.length === 0) {
+        try {
+          const chatKey = `ezsphere:chat:${agentChatKey(id)}`;
+          let raw = localStorage.getItem(chatKey);
+          // 迁移旧键
+          if (!raw) {
+            const legacyRaw = localStorage.getItem(`echobird:chat:${agentChatKey(id)}`);
+            if (legacyRaw) {
+              localStorage.setItem(chatKey, legacyRaw);
+              localStorage.removeItem(`echobird:chat:${agentChatKey(id)}`);
+              raw = legacyRaw;
+            }
+          }
+          if (raw) {
+            const stored = JSON.parse(raw) as DiskMsg[];
+            if (Array.isArray(stored) && stored.length > 0) {
+              history = stored.map((m) => fromDisk(m));
+              chatHistoryMap.current.set(id, history);
+            } else {
+              history = [];
+            }
+          } else {
+            history = [];
+          }
+        } catch {
+          history = [];
+        }
+      }
+      setChatOutput(history);
+      prevServerRef.current = id;
+      setSelectedServerId(id);
+    },
+    [chatOutput, fromDisk]
+  );
+
+  // Load models from ezSphere provider config; refresh on provider changes and focus.
+  const loadModels = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      const loaded = await loadEzSphereAgentModels();
+      setModels(loaded);
+      if (loaded.length === 0) {
+        setAgentModel(null);
+      } else if (!agentModel || !loaded.some((m) => m.internalId === agentModel)) {
+        setAgentModel(loaded[0].internalId);
+      }
+    } catch (e) {
+      console.error('Load ezSphere models failed:', e);
+    }
+  }, [agentModel, setAgentModel]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlistenProviderSwitch: (() => void) | null = null;
+    let unlistenUniversalSync: (() => void) | null = null;
+    const refreshModels = () => {
+      if (!disposed) void loadModels();
+    };
+
+    refreshModels();
+    window.addEventListener('focus', refreshModels);
+    window.addEventListener('models-changed', refreshModels);
+
+    if (isTauriRuntime()) {
+      providersApi
+        .onSwitched(refreshModels)
+        .then((unlisten) => {
+          if (disposed) {
+            unlisten();
+          } else {
+            unlistenProviderSwitch = unlisten;
+          }
+        })
+        .catch((e) => console.error('Subscribe provider switch failed:', e));
+
+      listen('universal-provider-synced', refreshModels)
+        .then((unlisten) => {
+          if (disposed) {
+            unlisten();
+          } else {
+            unlistenUniversalSync = unlisten;
+          }
+        })
+        .catch((e) => console.error('Subscribe universal provider sync failed:', e));
+    }
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', refreshModels);
+      window.removeEventListener('models-changed', refreshModels);
+      unlistenProviderSwitch?.();
+      unlistenUniversalSync?.();
+    };
+  }, [loadModels]);
+
+  const agentModelData = models.find((m) => m.internalId === agentModel);
+
+  // Notify parent about running state
+  useEffect(() => {
+    onAgentRunningChange?.(!!agentModel);
+  }, [agentModel, onAgentRunningChange]);
+
+  // Chat scroll is managed by MotherAgentMain so the user can scroll up
+  // freely while the agent is streaming.
+
+  // Subscribe to agent events
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    api
+      .listenAgentEvents((event: AgentEvent) => {
+        if (cancelled) return;
+        switch (event.type) {
+          case 'text_delta':
+            setChatOutput((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.type === 'assistant') {
+                return [...prev.slice(0, -1), { ...last, text: last.text + event.text }];
+              }
+              // First chunk of a new assistant message — notify parent
+              onNewMessage?.();
+              return [...prev, { type: 'assistant', text: event.text }];
+            });
+            break;
+          case 'thinking':
+            // Reasoning is private — not surfaced into the chat stream
+            break;
+          case 'tool_call_start':
+            setChatOutput((prev) => [
+              ...prev,
+              {
+                type: 'tool_call',
+                id: event.id,
+                name: event.name,
+                args: '',
+                status: 'running',
+              },
+            ]);
+            break;
+          case 'tool_call_args':
+            setChatOutput((prev) =>
+              prev.map((m) =>
+                m.type === 'tool_call' && m.id === event.id
+                  ? { ...m, args: m.args + event.args }
+                  : m
+              )
+            );
+            break;
+          case 'tool_result':
+            setChatOutput((prev) =>
+              prev.map((m) =>
+                m.type === 'tool_call' && m.id === event.id
+                  ? { ...m, status: event.success ? 'done' : 'failed', output: event.output }
+                  : m
+              )
+            );
+            break;
+          case 'done':
+            if (abortTimeoutRef.current) {
+              clearTimeout(abortTimeoutRef.current);
+              abortTimeoutRef.current = null;
+            }
+            setIsProcessing(false);
+            setAgentState('idle');
+            break;
+          case 'error': {
+            if (abortTimeoutRef.current) {
+              clearTimeout(abortTimeoutRef.current);
+              abortTimeoutRef.current = null;
+            }
+            const key = errorToKey(event.message);
+            // Skip duplicate cancelled message — already added immediately in abortAgent()
+            if (key !== 'error.userCancelled') {
+              // v4.7.0+: when the backend emits a provider's verbatim
+              // error ("Invalid API Key" / "Rate limit exceeded" / etc.),
+              // errorToKey returns null and we render that message
+              // straight through. Categorized errors still go via i18n.
+              const errBubble = key
+                ? { type: 'error' as const, text: '', i18nKey: key }
+                : { type: 'error' as const, text: String(event.message ?? '').slice(0, 500) };
+              setChatOutput((prev) => [...prev, errBubble]);
+            }
+            setIsProcessing(false);
+            setAgentState('idle');
+            break;
+          }
+          case 'state':
+            setAgentState(event.state);
+            break;
+        }
+      })
+      .then((fn) => {
+        if (cancelled) {
+          fn(); // Already unmounted, clean up immediately
+        } else {
+          unlisten = fn;
+        }
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Internal send function
+  const handleChatSendInternal = useCallback(
+    async (message: string, displayText?: string, chips?: BubbleChip[]) => {
+      if (isProcessing || !message.trim()) return;
+      setIsProcessing(true);
+      // Use display text + chips if provided (chip-send path), else full message text
+      setChatOutput((prev) => [
+        ...prev,
+        { type: 'user', text: (displayText ?? message).trim(), chips },
+      ]);
+      const modelData = models.find((m) => m.internalId === agentModel);
+      if (!modelData) {
+        setChatOutput((prev) => [
+          ...prev,
+          { type: 'error', text: '', i18nKey: 'error.noModelSelected' },
+        ]);
+        setIsProcessing(false);
+        return;
+      }
+
+      try {
+        // Triple-fallback protocol strategy:
+        //   1. Has anthropicUrl  → use it directly as Anthropic
+        //   2. Only baseUrl      → derive Anthropic URL (/v1 → /anthropic) and try first
+        //   3. Backend gets 400  → auto-downgrade to OpenAI base_url
+        const deriveAnthropicUrl = (base: string): string | null => {
+          if (!base) return null;
+          // Replace trailing /v1 or /v1/ with /anthropic (works for local LLM proxy)
+          const stripped = base.trim().replace(/\/v1\/?$/, '');
+          // Only derive if the original URL had /v1 (to avoid random derivations)
+          if (stripped !== base.trim()) return `${stripped}/anthropic`;
+          return null;
+        };
+
+        const anthropicUrl = modelData.anthropicUrl || deriveAnthropicUrl(modelData.baseUrl || '');
+        await api.sendAgentMessage({
+          message: message.trim(),
+          model_id: modelData.internalId,
+          // Always pass OpenAI URL as base_url (OpenAI fallback)
+          base_url: modelData.baseUrl || '',
+          api_key: modelData.apiKey,
+          model_name: modelData.modelId || modelData.name,
+          // Start with Anthropic when available; backend downgrades to OpenAI on 400
+          provider: anthropicUrl ? 'anthropic' : 'openai',
+          anthropic_url: anthropicUrl || undefined,
+          server_ids: selectedServerId === 'local' ? [] : [selectedServerId],
+          skills: [],
+          locale: normalizeAgentLocale(locale),
+        });
+      } catch (e) {
+        const key = errorToKey(String(e));
+        const type: 'cancelled' | 'error' = key === 'error.userCancelled' ? 'cancelled' : 'error';
+        // Same v4.7.0+ pass-through as the streaming-error case: when
+        // errorToKey can't classify, render the message verbatim.
+        const bubble: ChatMessage = key
+          ? { type, text: '', i18nKey: key }
+          : { type, text: String(e ?? '').slice(0, 500) };
+        setChatOutput((prev) => [...prev, bubble]);
+        setIsProcessing(false);
+      }
+    },
+    [agentModel, models, isProcessing, selectedServerId, locale]
+  );
+
+  // Chat send (from input)
+  const handleChatSend = useCallback(async () => {
+    if (!chatInput.trim()) return;
+    const msg = chatInput.trim();
+    setChatInput('');
+    handleChatSendInternal(msg);
+  }, [chatInput, handleChatSendInternal]);
+
+  return (
+    <MotherAgentContext.Provider
+      value={{
+        models,
+        agentModel,
+        setAgentModel,
+        chatInput,
+        setChatInput,
+        chatOutput,
+        isProcessing,
+        agentModelData,
+        agentState,
+        chatEndRef,
+        handleChatSend,
+        sendMessage: handleChatSendInternal,
+
+        sshServers,
+        addSSHServer,
+        removeSSHServer,
+        selectedServerId,
+        selectServer,
+        clearChat: () => {
+          setChatOutput([]);
+          persistence.clearHistory();
+          api.resetAgent(selectedServerId).catch(() => {});
+        },
+        abortAgent: () => {
+          // Idempotent on rapid multi-clicks: backend `agent_abort` is
+          // safe to invoke repeatedly (a no-op once `sess.running` is
+          // false), but each frontend click used to stack another
+          // "已取消" chat bubble — users who clicked impatiently 5-10
+          // times while waiting for the agent to unwind saw a flood of
+          // duplicates. We now skip adding a new bubble when the last
+          // chat item is already a `cancelled` one, and skip firing
+          // backend abort + restart safety-net timer while one is
+          // already pending.
+          if (abortTimeoutRef.current) {
+            // An abort is already in flight — backend will unwind in a
+            // moment, no need to spam more requests or bubbles.
+            return;
+          }
+          api.abortAgent(selectedServerId).catch(() => {});
+          setChatOutput((o) => {
+            const last = o[o.length - 1];
+            if (last && last.type === 'cancelled') {
+              return o; // dedup: don't stack duplicate cancelled bubbles
+            }
+            return [...o, { type: 'cancelled', text: '', i18nKey: 'error.userCancelled' }];
+          });
+          // Frontend safety net: force reset after 3s if backend doesn't respond
+          abortTimeoutRef.current = setTimeout(() => {
+            abortTimeoutRef.current = null;
+            setIsProcessing((prev) => {
+              if (prev) {
+                setAgentState('idle');
+              }
+              return false;
+            });
+          }, 3000);
+        },
+        maDiskTotal: persistence.diskTotal,
+        loadOlderChat: async () => {
+          const count = await persistence.loadOlderChat();
+          return count > 0 ? chatOutput.slice(0, count) : [];
+        },
+      }}
+    >
+      {children}
+    </MotherAgentContext.Provider>
+  );
+}

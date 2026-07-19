@@ -1,0 +1,25 @@
+{
+    "id": "hermes",
+    "displayName": "Hermes Agent",
+    "homepage": "https://hermes-agent.nousresearch.com",
+    "docs": "https://hermes-agent.nousresearch.com/docs/",
+    "github": "https://github.com/NousResearch/hermes-agent",
+    "install": {
+        "one-liner (macOS / Linux)": "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash",
+        "one-liner (Windows)": "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex",
+        "note": "Python-based agent by Nous Research. Supports Linux, macOS, and Windows. After install, run 'hermes --version' to verify (on macOS/Linux you may need 'source ~/.bashrc' first)."
+    },
+    "cli": {
+        "description": "Hermes uses 'hermes chat -q' for non-interactive oneshot mode.",
+        "chat_command": "hermes chat -q \"<message>\" --quiet",
+        "detect_command": "hermes --version",
+        "supported_flags": ["-q/--query (message text)", "--quiet (suppress UI, output only)", "--model (model override)", "--provider (provider override)", "--resume (resume session)"],
+        "role_mechanism": "Hermes uses SOUL.md at ~/.hermes/SOUL.md for agent identity. ezSphere writes role content here; Hermes auto-detects changes on next session.",
+        "output_format": "With --quiet flag, outputs clean text response only.",
+        "note": "Hermes is Python-based, by Nous Research. Supports 200+ models via OpenRouter, plus MiniMax, Kimi, OpenAI, Anthropic, custom endpoints."
+    },
+    "network_requirements": {
+        "test_urls": ["https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"],
+        "mirrors": {}
+    }
+}

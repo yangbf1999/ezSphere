@@ -1,0 +1,21 @@
+{
+    "hints": [
+        {
+            "action": "install",
+            "agent": "Claude Code"
+        },
+        {
+            "action": "install",
+            "agent": "Hermes Agent"
+        },
+        {
+            "action": "showSpecs"
+        },
+        {
+            "action": "networkInfo"
+        },
+        {
+            "action": "securityAudit"
+        }
+    ]
+}
