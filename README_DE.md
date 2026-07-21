@@ -193,21 +193,21 @@ sudo xattr -r -d com.apple.quarantine /Applications/ezSphere.app/
 
 ### Grundlegende Verwendung
 
-1. **Anbieter hinzufügen**: Klicken Sie auf „Add Provider" → Wählen Sie ein Preset oder erstellen Sie eine eigene Konfiguration
+1. **Anbieter hinzufügen**: Gehen Sie zur Seite "Modellzentrum" -> Wählen Sie ein Preset oder erstellen Sie eine benutzerdefinierte Konfiguration
 2. **Anbieter wechseln**:
-   - Hauptoberfläche: Anbieter auswählen → auf „Enable" klicken
+   - App-Manager: Anbieter auswählen -> Auf "Aktivieren" klicken
    - System-Tray: Anbietername direkt anklicken (sofort wirksam)
-3. **Wirksam werden**: Starten Sie Ihr Terminal oder das entsprechende CLI-Werkzeug neu, um die Änderungen anzuwenden (Claude Code erfordert keinen Neustart)
-4. **Zurück zum Offiziellen**: Fügen Sie ein „Official Login"-Preset hinzu, starten Sie das CLI-Werkzeug neu und folgen Sie dann seinem Login-/OAuth-Vorgang
+3. **Aktivierung**: Terminal oder das entsprechende CLI-Werkzeug neu starten, um Änderungen anzuwenden (Claude Code erfordert keinen Neustart)
+4. **Zurück zu offiziell**: Ein "Offizielle Anmeldung"-Preset hinzufügen, CLI-Werkzeug neu starten und dem Login/OAuth-Flow folgen
 
-### MCP, Prompts, Skills & Sessions
+### MCP, Prompts, Skills & Sitzungen
 
-- **MCP**: Klicken Sie auf die Schaltfläche „MCP" → Server über Vorlagen oder eigene Konfiguration hinzufügen → Synchronisierung pro App umschalten
-- **Prompts**: Klicken Sie auf „Prompts" → Presets mit dem Markdown-Editor erstellen → Aktivieren, um mit den Live-Dateien zu synchronisieren
-- **Skills**: Klicken Sie auf „Skills" → GitHub-Repositorys durchsuchen → mit einem Klick in unterstützte Apps installieren
-- **Sessions**: Klicken Sie auf „Sessions" → Gesprächsverlauf aus unterstützten Sitzungsquellen durchsuchen, suchen und wiederherstellen
+- **MCP**: Gehen Sie zur Seite "MCP-Verwaltung", klicken Sie auf die "MCP"-Schaltfläche -> Server über Vorlagen oder benutzerdefinierte Konfiguration hinzufügen -> Per-App-Synchronisierung umschalten
+- **Prompts**: Gehen Sie zur Seite "Prompts-Verwaltung" -> Presets mit Markdown-Editor erstellen -> Aktivieren, um mit Live-Dateien zu synchronisieren
+- **Skills**: Gehen Sie zur Seite "Skills-Verwaltung" -> Skills lokal importieren -> Ein-Klick-Installation in unterstützte Apps
+- **Sitzungen**: Gehen Sie zur Seite "Sitzungsverwaltung" -> Unterstützte Sitzungsquellen durchsuchen, suchen und wiederherstellen
 
-> **Hinweis**: Beim Erststart können Sie bestehende CLI-Werkzeug-Konfigurationen manuell als Standardanbieter importieren.
+> **Hinweis**: Beim ersten Start können Sie vorhandene CLI-Tool-Konfigurationen manuell als Standardanbieter importieren.
 
 ## Download & Installation
 

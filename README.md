@@ -187,19 +187,19 @@ Add an official provider from the preset list. After switching to it, run the Lo
 
 ### Basic Usage
 
-1. **Add Provider**: Click "Add Provider" → Choose a preset or create custom configuration
+1. **Add Provider**: Go to "Model Center" page -> Choose a preset or create custom configuration
 2. **Switch Provider**:
-   - Main UI: Select provider → Click "Enable"
+   - App Manager: Select provider -> Click "Enable"
    - System Tray: Click provider name directly (instant effect)
 3. **Takes Effect**: Restart your terminal or the corresponding CLI tool to apply changes (Claude Code does not require a restart)
 4. **Back to Official**: Add an "Official Login" preset, restart the CLI tool, then follow its login/OAuth flow
 
 ### MCP, Prompts, Skills & Sessions
 
-- **MCP**: Click the "MCP" button → Add servers via templates or custom config → Toggle per-app sync
-- **Prompts**: Click "Prompts" → Create presets with Markdown editor → Activate to sync to live files
-- **Skills**: Click "Skills" → Browse GitHub repos → One-click install to supported apps
-- **Sessions**: Click "Sessions" → Browse, search, and restore conversation history across supported session sources
+- **MCP**: Go to "MCP Management" page, click "MCP" button -> Add servers via templates or custom config -> Toggle per-app sync
+- **Prompts**: Go to "Prompts Management" page -> Create presets with Markdown editor -> Activate to sync to live files
+- **Skills**: Go to "Skills Management" page -> Import skills from local -> One-click install to supported apps
+- **Sessions**: Go to "Session Manager" page -> Browse, search, and restore conversation history across supported session sources
 
 > **Note**: On first launch, you can manually import existing CLI tool configs as the default provider.
 
