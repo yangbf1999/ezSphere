@@ -106,6 +106,7 @@ in Unternehmen und Universitäten weltweit.
 ### System & Plattform
 
 - **Cloud-Synchronisierung** — Eigenes Konfigurationsverzeichnis (Dropbox, OneDrive, iCloud, NAS), WebDAV-Server- und S3-kompatible Speichersynchronisierung
+- **Deep Link** (`ezsphere://`) - Importieren Sie Anbieter, MCP-Server, Prompts und Skills per URL
 - Dunkles / Helles / System-Theme, automatischer Start, automatischer Updater, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
 
 ## FAQ

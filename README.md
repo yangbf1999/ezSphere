@@ -110,6 +110,7 @@ in enterprises and universities worldwide.
 ### System & Platform
 
 - **Cloud sync** — Custom config directory (Dropbox, OneDrive, iCloud, NAS), WebDAV server and S3-compatible storage sync
+- **Deep Link** (`ezsphere://`) - Import providers, MCP servers, prompts, and skills via URL
 - Dark / Light / System theme, auto-launch, auto-updater, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
 
 ## FAQ

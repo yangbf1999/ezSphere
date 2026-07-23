@@ -95,7 +95,7 @@ ezSphere 内で自然言語で質問するだけで、AIアシスタントが自
 
 ### MCP、Prompts & Skills
 
-- **統一 MCP パネル** -- Claude、Codex、Hermes の MCP サーバーを管理
+- **統一 MCP パネル** -- Claude、Codex、Hermes の MCP サーバーを管理、Deep Link インポート対応
 - **Prompts** -- Markdown エディタ、クロスアプリ同期（CLAUDE.md / AGENTS.md）、バックフィル保護
 - **Skills** -- GitHub リポジトリまたは ZIP ファイルからワンクリックインストール、カスタムリポジトリ管理、シンボリックリンクとファイルコピーに対応
 
@@ -110,6 +110,7 @@ ezSphere 内で自然言語で質問するだけで、AIアシスタントが自
 ### システム & プラットフォーム
 
 - **クラウド同期** -- カスタム設定ディレクトリ（Dropbox、OneDrive、iCloud、NAS）、WebDAV サーバーおよび S3 互換ストレージ同期
+- **Deep Link** (`ezsphere://`) -- URL 経由でプロバイダ、MCP サーバー、Prompts、Skills をワンクリックインポート
 - ダーク / ライト / システムテーマ、自動起動、自動アップデーター、アトミック書き込み、自動バックアップ、多言語対応（簡体中文/繁體中文/英/日）
 
 ## よくある質問
